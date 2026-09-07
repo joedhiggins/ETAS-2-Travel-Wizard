@@ -326,7 +326,7 @@ export function App() {
             <CostField label="Rental fuel" value={trip.expenses.rentalFuel} onChange={(rentalFuel) => patchExpenses({ rentalFuel }, ["expenses.rentalFuel"])} noteKey="fuel" notes={trip.expenses.notes} onNotes={(notes) => patchExpenses({ notes })} origin={doc.provenance["expenses.rentalFuel"]} />
           </div>
 
-          <h3>Other expenses</h3>
+          <h3>Other expenses (e.g., hotel parking)</h3>
           {trip.expenses.extraExpenses.map((item, i) => (
             <ExtraRow
               key={item.id}
@@ -520,6 +520,7 @@ function StopEditor({
   const showLodgingTable = stop.lodgingMode === "byDay" || stop.taxMode === "byDay";
   const lastDay = stop.depart;
   const p = (field: string) => `stops.${index}.${field}`;
+  const [claimLateCheckout, setClaimLateCheckout] = useState(() => (stop.lateCheckoutFee || 0) > 0);
 
   function setDates(partial: Partial<TdyStop>, paths: string[]) {
     onChange(syncDailyLodging({ ...stop, ...partial }), paths);
@@ -669,10 +670,30 @@ function StopEditor({
         </div>
       )}
 
-      <label>
-        Late checkout fee (last day at this location)
-        <input type="number" min={0} step={0.01} value={stop.lateCheckoutFee || ""} onChange={(e) => onChange({ ...stop, lateCheckoutFee: num(e.target.value) })} />
+      <label className="note-toggle">
+        <input
+          type="checkbox"
+          checked={claimLateCheckout}
+          onChange={(e) => {
+            const on = e.target.checked;
+            setClaimLateCheckout(on);
+            if (!on) onChange({ ...stop, lateCheckoutFee: 0 }, [p("lateCheckoutFee")]);
+          }}
+        />
+        Late checkout fee on last day (optional; more often an expense-report item)
       </label>
+      {claimLateCheckout && (
+        <label>
+          Late checkout fee
+          <input
+            type="number"
+            min={0}
+            step={0.01}
+            value={stop.lateCheckoutFee || ""}
+            onChange={(e) => onChange({ ...stop, lateCheckoutFee: num(e.target.value) }, [p("lateCheckoutFee")])}
+          />
+        </label>
+      )}
 
       <div className="stop-actions">
         <button type="button" className="secondary" onClick={onLookup} disabled={!book}>
@@ -749,7 +770,7 @@ function GroundLeg({
           )}
         </div>
       ) : (
-        <CostField label="Rideshare / taxi / parking" value={rideshare} onChange={onRideshare} noteKey={rideNoteKey} notes={notes} onNotes={onNotes} />
+        <CostField label="Rideshare / taxi" value={rideshare} onChange={onRideshare} noteKey={rideNoteKey} notes={notes} onNotes={onNotes} />
       )}
     </fieldset>
   );
