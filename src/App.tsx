@@ -1,19 +1,33 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { buildDays, formatLongDate, formatMoney, formatOtherBreakout, syncDailyLodging, tripTotals } from "./days";
-import { defaultTrip, emptyExpense, emptyStop, MAILBOX, POV_RATE_AS_OF, STORAGE_KEY, US_STATES } from "./defaults";
+import { emptyExpense, emptyStop, MAILBOX, POV_RATE_AS_OF, US_STATES } from "./defaults";
 import { lookupConus, suggestLocalities } from "./rates";
 import { requiredDocs } from "./rules";
-import type { CostNote, ExtraExpense, GroundMode, RateBook, TdyStop, TripState } from "./types";
-import { downloadTripJson, downloadWorkbook } from "./workbook";
+import type { CostNote, ExtraExpense, GroundMode, ProvenanceSource, RateBook, TdyStop, TripDocument } from "./types";
+import {
+  clearWorkingCopy,
+  downloadTripJson,
+  emptyDocument,
+  loadWorkingCopy,
+  markProvenance,
+  needsReview,
+  originClass,
+  parseTripFile,
+  saveWorkingCopy,
+} from "./tripFile";
+import { downloadWorkbook } from "./workbook";
 
 const STEPS = ["Trip", "Itinerary", "Mode & exceptions", "Packet"] as const;
 
 export function App() {
   const [step, setStep] = useState(0);
-  const [trip, setTrip] = useState<TripState>(() => loadTrip());
+  const [doc, setDoc] = useState<TripDocument>(() => loadWorkingCopy());
   const [book, setBook] = useState<RateBook | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const importRef = useRef<HTMLInputElement>(null);
+  const trip = doc.trip;
 
   useEffect(() => {
     fetch("./rates/conus-fy2026.json")
@@ -23,19 +37,27 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trip));
-  }, [trip]);
+    saveWorkingCopy(doc);
+  }, [doc]);
 
   const days = useMemo(() => buildDays(trip), [trip]);
   const totals = useMemo(() => tripTotals(days), [days]);
   const docs = useMemo(() => requiredDocs(trip), [trip]);
 
-  function patch(partial: Partial<TripState>) {
-    setTrip((t) => ({ ...t, ...partial }));
+  function patch(partial: Partial<typeof trip>, paths: string[] = []) {
+    setDoc((d) => ({
+      ...d,
+      trip: { ...d.trip, ...partial },
+      provenance: paths.length ? markProvenance(d.provenance, paths, "user") : d.provenance,
+    }));
   }
 
-  function patchExpenses(partial: Partial<TripState["expenses"]>) {
-    setTrip((t) => ({ ...t, expenses: { ...t.expenses, ...partial } }));
+  function patchExpenses(partial: Partial<typeof trip.expenses>, paths: string[] = []) {
+    setDoc((d) => ({
+      ...d,
+      trip: { ...d.trip, expenses: { ...d.trip.expenses, ...partial } },
+      provenance: paths.length ? markProvenance(d.provenance, paths, "user") : d.provenance,
+    }));
   }
 
   function applyLookup(stop: TdyStop): TdyStop {
@@ -50,6 +72,26 @@ export function App() {
       rateSource: found.source,
       rateLabel: found.label,
     });
+  }
+
+  async function onImportFile(file: File) {
+    setError("");
+    setNotice("");
+    try {
+      const text = await file.text();
+      const { doc: incoming, warning } = parseTripFile(text);
+      const hasWork =
+        trip.travelerName || trip.purpose || trip.departDate || trip.stops.some((s) => s.city);
+      if (hasWork && !window.confirm("Replace the current draft with this trip JSON?")) return;
+      setDoc(incoming);
+      setStep(0);
+      const review = needsReview(incoming.provenance)
+        ? " Highlighted fields came from an LLM or are unconfirmed — check them before you download the workbook."
+        : "";
+      setNotice((warning ? `${warning} ` : "Imported trip JSON. ") + "Walk the steps to review." + review);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not import that JSON file.");
+    }
   }
 
   async function onExport() {
@@ -73,6 +115,23 @@ export function App() {
           Local-only draft of the Travel Workbook plus the forms this trip needs.
           Email the pack to <a href={`mailto:${MAILBOX}`}>{MAILBOX}</a>. Do not book until the DPM approves the EA.
         </p>
+        <p className="lede import-line">
+          <button type="button" className="linkish" onClick={() => importRef.current?.click()}>
+            Import trip JSON
+          </button>
+          {" · "}resume a downloaded draft or drop in a file from the estimate skill.
+        </p>
+        <input
+          ref={importRef}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) void onImportFile(file);
+          }}
+        />
       </header>
 
       <ol className="steps">
@@ -86,43 +145,64 @@ export function App() {
         ))}
       </ol>
 
+      {notice && <p className="notice">{notice}</p>}
+      {needsReview(doc.provenance) && (
+        <p className="hint origin-legend">
+          Amber-outlined fields came from an LLM or are unconfirmed. Changing a field marks it as yours.
+        </p>
+      )}
+
       {step === 0 && (
         <section className="card">
           <h2>Who and why</h2>
           <div className="grid">
-            <label>
-              Traveler name
-              <input value={trip.travelerName} onChange={(e) => patch({ travelerName: e.target.value })} />
-            </label>
-            <label>
-              Home of record
-              <input value={trip.hor} onChange={(e) => patch({ hor: e.target.value })} placeholder="City, ST" />
-            </label>
-            <label>
-              Project
-              <input value={trip.project} onChange={(e) => patch({ project: e.target.value })} />
-            </label>
-            <label>
-              Project code
-              <input value={trip.projectCode} onChange={(e) => patch({ projectCode: e.target.value })} />
-            </label>
-            <label>
-              Depart HOR
-              <input type="date" value={trip.departDate} onChange={(e) => patch({ departDate: e.target.value })} />
-            </label>
-            <label>
-              Return to HOR
-              <input type="date" value={trip.returnDate} onChange={(e) => patch({ returnDate: e.target.value })} />
-            </label>
-            <label className="wide">
-              Purpose of travel
-              <textarea
-                rows={4}
-                value={trip.purpose}
-                onChange={(e) => patch({ purpose: e.target.value })}
-                placeholder="In support of ETAS task order… include PO-approved upgrades or unusual routing."
-              />
-            </label>
+            <Origin path="travelerName" provenance={doc.provenance}>
+              <label>
+                Traveler name
+                <input value={trip.travelerName} onChange={(e) => patch({ travelerName: e.target.value }, ["travelerName"])} />
+              </label>
+            </Origin>
+            <Origin path="hor" provenance={doc.provenance}>
+              <label>
+                Home of record
+                <input value={trip.hor} onChange={(e) => patch({ hor: e.target.value }, ["hor"])} placeholder="City, ST" />
+              </label>
+            </Origin>
+            <Origin path="project" provenance={doc.provenance}>
+              <label>
+                Project
+                <input value={trip.project} onChange={(e) => patch({ project: e.target.value }, ["project"])} />
+              </label>
+            </Origin>
+            <Origin path="projectCode" provenance={doc.provenance}>
+              <label>
+                Project code
+                <input value={trip.projectCode} onChange={(e) => patch({ projectCode: e.target.value }, ["projectCode"])} />
+              </label>
+            </Origin>
+            <Origin path="departDate" provenance={doc.provenance}>
+              <label>
+                Depart HOR
+                <input type="date" value={trip.departDate} onChange={(e) => patch({ departDate: e.target.value }, ["departDate"])} />
+              </label>
+            </Origin>
+            <Origin path="returnDate" provenance={doc.provenance}>
+              <label>
+                Return to HOR
+                <input type="date" value={trip.returnDate} onChange={(e) => patch({ returnDate: e.target.value }, ["returnDate"])} />
+              </label>
+            </Origin>
+            <Origin path="purpose" provenance={doc.provenance} className="wide">
+              <label className="wide">
+                Purpose of travel
+                <textarea
+                  rows={4}
+                  value={trip.purpose}
+                  onChange={(e) => patch({ purpose: e.target.value }, ["purpose"])}
+                  placeholder="In support of ETAS task order… include PO-approved upgrades or unusual routing."
+                />
+              </label>
+            </Origin>
           </div>
         </section>
       )}
@@ -142,15 +222,34 @@ export function App() {
               departDate={trip.departDate}
               returnDate={trip.returnDate}
               book={book}
-              onChange={(next) => {
-                const stops = trip.stops.slice();
-                stops[index] = next;
-                patch({ stops });
+              provenance={doc.provenance}
+              onChange={(next, paths) => {
+                setDoc((d) => {
+                  const stops = d.trip.stops.slice();
+                  stops[index] = next;
+                  return {
+                    ...d,
+                    trip: { ...d.trip, stops },
+                    provenance: paths?.length ? markProvenance(d.provenance, paths, "user") : d.provenance,
+                  };
+                });
               }}
               onLookup={() => {
-                const stops = trip.stops.slice();
-                stops[index] = applyLookup(stop);
-                patch({ stops });
+                const next = applyLookup(stop);
+                const source: ProvenanceSource = next.rateSource === "gsa" ? "gsa" : "user";
+                setDoc((d) => {
+                  const stops = d.trip.stops.slice();
+                  stops[index] = next;
+                  return {
+                    ...d,
+                    trip: { ...d.trip, stops },
+                    provenance: markProvenance(
+                      d.provenance,
+                      [`stops.${index}.mie`, `stops.${index}.lodgingMax`, `stops.${index}.lodgingActual`],
+                      source,
+                    ),
+                  };
+                });
               }}
               onRemove={
                 trip.stops.length > 1
@@ -220,11 +319,11 @@ export function App() {
             A separate agent-fee field would count twice.
           </p>
           <div className="grid">
-            <CostField label="Airfare (include ADTRAV / agent fee here)" value={trip.expenses.airfare} onChange={(airfare) => patchExpenses({ airfare })} noteKey="airfare" notes={trip.expenses.notes} onNotes={(notes) => patchExpenses({ notes })} />
-            <CostField label="Baggage out" value={trip.expenses.baggageOutbound} onChange={(baggageOutbound) => patchExpenses({ baggageOutbound })} noteKey="bagOut" notes={trip.expenses.notes} onNotes={(notes) => patchExpenses({ notes })} />
-            <CostField label="Baggage return" value={trip.expenses.baggageReturn} onChange={(baggageReturn) => patchExpenses({ baggageReturn })} noteKey="bagReturn" notes={trip.expenses.notes} onNotes={(notes) => patchExpenses({ notes })} />
-            <CostField label="Rental vehicle" value={trip.expenses.rental} onChange={(rental) => patchExpenses({ rental })} noteKey="rental" notes={trip.expenses.notes} onNotes={(notes) => patchExpenses({ notes })} />
-            <CostField label="Rental fuel" value={trip.expenses.rentalFuel} onChange={(rentalFuel) => patchExpenses({ rentalFuel })} noteKey="fuel" notes={trip.expenses.notes} onNotes={(notes) => patchExpenses({ notes })} />
+            <CostField label="Airfare (include ADTRAV / agent fee here)" value={trip.expenses.airfare} onChange={(airfare) => patchExpenses({ airfare }, ["expenses.airfare"])} noteKey="airfare" notes={trip.expenses.notes} onNotes={(notes) => patchExpenses({ notes })} origin={doc.provenance["expenses.airfare"]} />
+            <CostField label="Baggage out" value={trip.expenses.baggageOutbound} onChange={(baggageOutbound) => patchExpenses({ baggageOutbound }, ["expenses.baggageOutbound"])} noteKey="bagOut" notes={trip.expenses.notes} onNotes={(notes) => patchExpenses({ notes })} origin={doc.provenance["expenses.baggageOutbound"]} />
+            <CostField label="Baggage return" value={trip.expenses.baggageReturn} onChange={(baggageReturn) => patchExpenses({ baggageReturn }, ["expenses.baggageReturn"])} noteKey="bagReturn" notes={trip.expenses.notes} onNotes={(notes) => patchExpenses({ notes })} origin={doc.provenance["expenses.baggageReturn"]} />
+            <CostField label="Rental vehicle" value={trip.expenses.rental} onChange={(rental) => patchExpenses({ rental }, ["expenses.rental"])} noteKey="rental" notes={trip.expenses.notes} onNotes={(notes) => patchExpenses({ notes })} origin={doc.provenance["expenses.rental"]} />
+            <CostField label="Rental fuel" value={trip.expenses.rentalFuel} onChange={(rentalFuel) => patchExpenses({ rentalFuel }, ["expenses.rentalFuel"])} noteKey="fuel" notes={trip.expenses.notes} onNotes={(notes) => patchExpenses({ notes })} origin={doc.provenance["expenses.rentalFuel"]} />
           </div>
 
           <h3>Other expenses</h3>
@@ -294,6 +393,8 @@ export function App() {
               {trip.departDate ? formatLongDate(trip.departDate) : "—"} – {trip.returnDate ? formatLongDate(trip.returnDate) : "—"}
               {" · "}
               {days.length} day rows
+              {doc.revision > 0 ? ` · JSON r${doc.revision}` : ""}
+              {doc.exportedAt ? ` · last export ${doc.exportedAt}` : ""}
             </p>
           </div>
 
@@ -352,15 +453,20 @@ export function App() {
             <button type="button" onClick={onExport} disabled={busy || days.length === 0}>
               {busy ? "Building…" : "Download Travel Workbook"}
             </button>
-            <button type="button" className="secondary" onClick={() => downloadTripJson(trip)}>
+            <button type="button" className="secondary" onClick={() => setDoc(downloadTripJson(doc))}>
               Download trip JSON
+            </button>
+            <button type="button" className="secondary" onClick={() => importRef.current?.click()}>
+              Import trip JSON
             </button>
             <button
               type="button"
               className="secondary"
               onClick={() => {
-                localStorage.removeItem(STORAGE_KEY);
-                setTrip(defaultTrip());
+                clearWorkingCopy();
+                setDoc(emptyDocument());
+                setNotice("");
+                setError("");
                 setStep(0);
               }}
             >
@@ -369,6 +475,7 @@ export function App() {
           </div>
           <p className="hint">
             Next: combine estimates into one PDF, fill the linked forms, and send everything to {MAILBOX}.
+            JSON downloads are schema {doc.schemaVersion} with a revision number and UTC timestamp in the filename.
             Trip report / actuals come in a later version.
           </p>
         </section>
@@ -394,6 +501,7 @@ function StopEditor({
   departDate,
   returnDate,
   book,
+  provenance,
   onChange,
   onLookup,
   onRemove,
@@ -403,62 +511,76 @@ function StopEditor({
   departDate: string;
   returnDate: string;
   book: RateBook | null;
-  onChange: (stop: TdyStop) => void;
+  provenance: Record<string, ProvenanceSource>;
+  onChange: (stop: TdyStop, paths?: string[]) => void;
   onLookup: () => void;
   onRemove?: () => void;
 }) {
   const suggestions = book ? suggestLocalities(book, stop.city, stop.state) : [];
   const showLodgingTable = stop.lodgingMode === "byDay" || stop.taxMode === "byDay";
   const lastDay = stop.depart;
+  const p = (field: string) => `stops.${index}.${field}`;
 
-  function setDates(partial: Partial<TdyStop>) {
-    onChange(syncDailyLodging({ ...stop, ...partial }));
+  function setDates(partial: Partial<TdyStop>, paths: string[]) {
+    onChange(syncDailyLodging({ ...stop, ...partial }), paths);
   }
 
   return (
     <fieldset className="stop">
       <legend>Location {index + 2}</legend>
       <div className="grid">
-        <label>
-          City
-          <input value={stop.city} onChange={(e) => onChange({ ...stop, city: e.target.value })} list={`loc-${stop.id}`} />
-          <datalist id={`loc-${stop.id}`}>
-            {suggestions.map((s) => (
-              <option key={`${s.destination}-${s.state}`} value={s.destination} />
-            ))}
-          </datalist>
-        </label>
-        <label>
-          State
-          <select value={stop.state} onChange={(e) => onChange({ ...stop, state: e.target.value })}>
-            <option value="">—</option>
-            {US_STATES.map((st) => (
-              <option key={st} value={st}>{st}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          First day at this TDY
-          <input type="date" value={stop.arrive} onChange={(e) => setDates({ arrive: e.target.value })} />
-          <button type="button" className="linkish" disabled={!departDate} onClick={() => setDates({ arrive: departDate })}>
-            Same as depart HOR
-          </button>
-        </label>
-        <label>
-          Last day at this TDY
-          <input type="date" value={stop.depart} onChange={(e) => setDates({ depart: e.target.value })} />
-          <button type="button" className="linkish" disabled={!returnDate} onClick={() => setDates({ depart: returnDate })}>
-            Same as return HOR
-          </button>
-        </label>
-        <label>
-          Daily M&amp;IE
-          <input type="number" min={0} step={0.01} value={stop.mie} onChange={(e) => onChange({ ...stop, mie: num(e.target.value), rateSource: "manual", rateLabel: "Traveler override" })} />
-        </label>
-        <label>
-          Max lodging (per diem cap)
-          <input type="number" min={0} step={0.01} value={stop.lodgingMax} onChange={(e) => onChange({ ...stop, lodgingMax: num(e.target.value), rateSource: "manual", rateLabel: "Traveler override" })} />
-        </label>
+        <Origin path={p("city")} provenance={provenance}>
+          <label>
+            City
+            <input value={stop.city} onChange={(e) => onChange({ ...stop, city: e.target.value }, [p("city")])} list={`loc-${stop.id}`} />
+            <datalist id={`loc-${stop.id}`}>
+              {suggestions.map((s) => (
+                <option key={`${s.destination}-${s.state}`} value={s.destination} />
+              ))}
+            </datalist>
+          </label>
+        </Origin>
+        <Origin path={p("state")} provenance={provenance}>
+          <label>
+            State
+            <select value={stop.state} onChange={(e) => onChange({ ...stop, state: e.target.value }, [p("state")])}>
+              <option value="">—</option>
+              {US_STATES.map((st) => (
+                <option key={st} value={st}>{st}</option>
+              ))}
+            </select>
+          </label>
+        </Origin>
+        <Origin path={p("arrive")} provenance={provenance}>
+          <label>
+            First day at this TDY
+            <input type="date" value={stop.arrive} onChange={(e) => setDates({ arrive: e.target.value }, [p("arrive")])} />
+            <button type="button" className="linkish" disabled={!departDate} onClick={() => setDates({ arrive: departDate }, [p("arrive")])}>
+              Same as depart HOR
+            </button>
+          </label>
+        </Origin>
+        <Origin path={p("depart")} provenance={provenance}>
+          <label>
+            Last day at this TDY
+            <input type="date" value={stop.depart} onChange={(e) => setDates({ depart: e.target.value }, [p("depart")])} />
+            <button type="button" className="linkish" disabled={!returnDate} onClick={() => setDates({ depart: returnDate }, [p("depart")])}>
+              Same as return HOR
+            </button>
+          </label>
+        </Origin>
+        <Origin path={p("mie")} provenance={provenance}>
+          <label>
+            Daily M&amp;IE
+            <input type="number" min={0} step={0.01} value={stop.mie} onChange={(e) => onChange({ ...stop, mie: num(e.target.value), rateSource: "manual", rateLabel: "Traveler override" }, [p("mie")])} />
+          </label>
+        </Origin>
+        <Origin path={p("lodgingMax")} provenance={provenance}>
+          <label>
+            Max lodging (per diem cap)
+            <input type="number" min={0} step={0.01} value={stop.lodgingMax} onChange={(e) => onChange({ ...stop, lodgingMax: num(e.target.value), rateSource: "manual", rateLabel: "Traveler override" }, [p("lodgingMax")])} />
+          </label>
+        </Origin>
       </div>
 
       <div className="mode-row">
@@ -487,10 +609,12 @@ function StopEditor({
       </div>
 
       {stop.lodgingMode === "flat" && (
-        <label>
-          Actual lodging / night (under the cap is fine)
-          <input type="number" min={0} step={0.01} value={stop.lodgingActual || ""} onChange={(e) => onChange({ ...stop, lodgingActual: num(e.target.value) })} />
-        </label>
+        <Origin path={p("lodgingActual")} provenance={provenance}>
+          <label>
+            Actual lodging / night (under the cap is fine)
+            <input type="number" min={0} step={0.01} value={stop.lodgingActual || ""} onChange={(e) => onChange({ ...stop, lodgingActual: num(e.target.value) }, [p("lodgingActual")])} />
+          </label>
+        </Origin>
       )}
       {stop.taxMode === "total" && (
         <label>
@@ -677,6 +801,7 @@ function CostField({
   notes,
   onNotes,
   step = "0.01",
+  origin,
 }: {
   label: string;
   value: number;
@@ -685,9 +810,10 @@ function CostField({
   notes: Record<string, CostNote>;
   onNotes: (notes: Record<string, CostNote>) => void;
   step?: string;
+  origin?: ProvenanceSource;
 }) {
   return (
-    <div className="cost-field">
+    <div className={`cost-field ${originClass(origin)}`.trim()}>
       <label>
         {label}
         <input type="number" min={0} step={step} value={value || ""} onChange={(e) => onChange(num(e.target.value))} />
@@ -750,28 +876,30 @@ function YesNoRow({
   );
 }
 
+function Origin({
+  path,
+  provenance,
+  className,
+  children,
+}: {
+  path: string;
+  provenance: Record<string, ProvenanceSource>;
+  className?: string;
+  children: ReactNode;
+}) {
+  const src = provenance[path];
+  const origin = originClass(src);
+  return (
+    <div
+      className={[className, origin].filter(Boolean).join(" ") || undefined}
+      title={src && src !== "user" ? `Source: ${src}` : undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
 function num(v: string): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
-}
-
-function loadTrip(): TripState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultTrip();
-    const parsed = JSON.parse(raw) as TripState;
-    return {
-      ...defaultTrip(),
-      ...parsed,
-      expenses: { ...defaultTrip().expenses, ...parsed.expenses, notes: parsed.expenses?.notes ?? {} },
-      compliance: { ...defaultTrip().compliance, ...parsed.compliance },
-      stops: (parsed.stops?.length ? parsed.stops : defaultTrip().stops).map((s) => ({
-        ...emptyStop(),
-        ...s,
-        dailyLodging: s.dailyLodging ?? [],
-      })),
-    };
-  } catch {
-    return defaultTrip();
-  }
 }

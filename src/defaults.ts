@@ -1,6 +1,5 @@
 import type { ExtraExpense, TripState } from "./types";
 
-export const STORAGE_KEY = "etas-tar-beta-v2";
 export const MAILBOX = "ETAS_travel@hii.com";
 export const DEFAULT_POV_RATE = 0.76;
 export const POV_RATE_AS_OF = "FTR Bulletin 26-03, effective 1 Jul 2026";
