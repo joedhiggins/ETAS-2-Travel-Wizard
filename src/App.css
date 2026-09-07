@@ -41,6 +41,23 @@ body {
 }
 .lede { color: var(--muted); max-width: 62ch; }
 .lede a { color: var(--navy-2); }
+.import-line { margin-top: 10px; font-family: "Segoe UI", sans-serif; font-size: 0.9rem; }
+.origin-legend { margin: 0 0 16px; }
+.origin-review input,
+.origin-review select,
+.origin-review textarea {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 1px var(--amber);
+}
+.origin-gsa input,
+.origin-gsa select {
+  border-color: var(--ok);
+}
+.origin-team input,
+.origin-team select,
+.origin-team textarea {
+  border-color: var(--navy);
+}
 
 .steps {
   display: grid;
@@ -197,6 +214,7 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line
 .actions, .pager { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
 .pager { justify-content: space-between; }
 .error { color: #9b2c2c; }
+.notice { color: var(--ok); }
 
 @media (max-width: 720px) {
   .grid, .steps, .mode-row, .extra { grid-template-columns: 1fr; }

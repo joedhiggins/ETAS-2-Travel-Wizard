@@ -193,11 +193,3 @@ function safe(s: string): string {
   return s.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 40);
 }
 
-export function downloadTripJson(trip: TripState): void {
-  const blob = new Blob([JSON.stringify(trip, null, 2)], { type: "application/json" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `ETAS_trip_${safe(trip.travelerName) || "draft"}.json`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}

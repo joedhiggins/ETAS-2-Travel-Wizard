@@ -86,6 +86,20 @@ export interface TripState {
   compliance: Compliance;
 }
 
+/** Current trip JSON envelope. Bump SCHEMA_VERSION in tripFile.ts when this changes. */
+export type ProvenanceSource = "user" | "llm" | "gsa" | "travel-team" | "unconfirmed";
+export type TripFileKind = "authorization" | "expense";
+
+export interface TripDocument {
+  schemaVersion: number;
+  kind: TripFileKind;
+  tripId: string;
+  revision: number;
+  exportedAt?: string;
+  provenance: Record<string, ProvenanceSource>;
+  trip: TripState;
+}
+
 export interface DayRow {
   locLabel: string;
   date: string;
