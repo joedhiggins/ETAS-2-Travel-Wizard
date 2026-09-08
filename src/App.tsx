@@ -359,6 +359,7 @@ export function App() {
             notes={trip.expenses.notes}
             onNotes={(notes) => patchExpenses({ notes })}
             povNoteKey="povOut"
+            povMilesHint="Round-trip miles if you are being dropped off"
             rideNoteKey="rideshareOut"
             parkingNoteKey="parking"
           />
@@ -373,6 +374,7 @@ export function App() {
             notes={trip.expenses.notes}
             onNotes={(notes) => patchExpenses({ notes })}
             povNoteKey="povReturn"
+            povMilesHint="Round-trip miles if you are being picked up"
             rideNoteKey="rideshareReturn"
             sameMiles={
               trip.expenses.outboundMode === "pov" || trip.expenses.returnMode === "pov"
@@ -864,6 +866,7 @@ function GroundLeg({
   notes,
   onNotes,
   povNoteKey,
+  povMilesHint,
   rideNoteKey,
   parkingNoteKey,
   sameMiles,
@@ -883,6 +886,7 @@ function GroundLeg({
   notes: Record<string, CostNote>;
   onNotes: (notes: Record<string, CostNote>) => void;
   povNoteKey: string;
+  povMilesHint?: string;
   rideNoteKey: string;
   parkingNoteKey?: string;
   sameMiles?: () => void;
@@ -904,7 +908,7 @@ function GroundLeg({
           <label>
             POV miles
             <input type="number" min={0} step={0.1} value={povMiles || ""} onChange={(e) => onPovMiles(num(e.target.value))} />
-            <small>Round-trip miles if you are being picked up on the return leg</small>
+            {povMilesHint && <small>{povMilesHint}</small>}
             {sameMiles && (
               <button type="button" className="linkish" onClick={sameMiles}>Same as outbound</button>
             )}
