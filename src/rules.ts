@@ -67,6 +67,14 @@ export function requiredDocs(trip: TripState): RequiredDoc[] {
     });
   }
 
+  if (trip.expenses.outboundMode === "pov" && trip.expenses.airportParking > 0) {
+    docs.push({
+      id: "parking-rideshare",
+      title: "Rideshare quote for airport parking",
+      why: "Airport parking is compared to a round-trip rideshare estimate (plus the travel-team 20% tip). Attach a screenshot of that estimate when parking is claimed.",
+    });
+  }
+
   if (trip.compliance.nonstandardMode === "yes") {
     docs.push({
       id: "constructed",

@@ -5,8 +5,9 @@ import type { ProvenanceSource, TripDocument, TripFileKind, TripState } from "./
  * Schema changelog
  * 1 — Envelope: schemaVersion, kind, tripId, revision, exportedAt, provenance, trip.
  *     Bare TripState files (pre-envelope exports) migrate to 1 on import.
+ * 2 — travelerEmail, travelerPhone, purposeAddons, stop.zip, expenses.rideshareForParking.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const STORAGE_KEY = "etas-tar-doc-v1";
 export const LEGACY_STORAGE_KEY = "etas-tar-beta-v2";
 
@@ -94,7 +95,7 @@ export function parseTripFile(raw: string): { doc: TripDocument; warning?: strin
   if (errors.length) throw new Error(errors.join(" "));
   return {
     doc: emptyDocument(trip),
-    warning: "Imported a legacy trip file (no schema envelope). Saved going forward as schema 1.",
+    warning: "Imported a legacy trip file (no schema envelope). Saved going forward as schema 2.",
   };
 }
 
@@ -204,12 +205,19 @@ function hydrateTrip(value: unknown): TripState {
     ...parsed,
     expenses: { ...base.expenses, ...parsed.expenses, notes: parsed.expenses?.notes ?? {} },
     compliance: { ...base.compliance, ...parsed.compliance },
+    purposeAddons: parsed.purposeAddons?.length ? parsed.purposeAddons : purposeAddonsFromLegacy(parsed),
     stops: (parsed.stops?.length ? parsed.stops : base.stops).map((s) => ({
       ...emptyStop(),
       ...s,
+      zip: s.zip ?? "",
       dailyLodging: s.dailyLodging ?? [],
     })),
   };
+}
+
+function purposeAddonsFromLegacy(parsed: Partial<TripState>): string[] {
+  if (parsed.purposeAddons?.length) return parsed.purposeAddons;
+  return [""];
 }
 
 function validateTrip(trip: TripState): string[] {
@@ -222,6 +230,13 @@ function validateTrip(trip: TripState): string[] {
   if (trip.departDate && trip.returnDate && trip.returnDate < trip.departDate) {
     errors.push("Return date is before depart date.");
   }
+  if (trip.travelerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trip.travelerEmail.trim())) {
+    errors.push("Traveler email does not look like an email address.");
+  }
+  if (trip.travelerPhone) {
+    const digits = trip.travelerPhone.replace(/\D/g, "");
+    if (digits.length < 10 || digits.length > 15) errors.push("Traveler phone should include 10–15 digits.");
+  }
   trip.stops.forEach((stop, i) => {
     const n = i + 1;
     if (stop.arrive && !ISO_DATE.test(stop.arrive)) errors.push(`Stop ${n} arrive date is not YYYY-MM-DD.`);
@@ -233,4 +248,8 @@ function validateTrip(trip: TripState): string[] {
     if (!Number.isFinite(stop.lodgingMax) || stop.lodgingMax < 0) errors.push(`Stop ${n} has an invalid lodging cap.`);
   });
   return errors;
+}
+
+function safe(s: string): string {
+  return s.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 40);
 }

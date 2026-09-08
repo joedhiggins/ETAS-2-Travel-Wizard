@@ -76,7 +76,10 @@ body {
   background: #fff;
   padding: 10px 12px;
   border-radius: 10px;
-  font: inherit;
+  font-family: "Segoe UI", sans-serif;
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--ink);
   cursor: pointer;
 }
 .steps span {
@@ -86,10 +89,13 @@ body {
   display: grid;
   place-items: center;
   background: var(--paper);
+  color: var(--ink);
   font-family: "Segoe UI", sans-serif;
   font-size: 0.8rem;
+  font-weight: 700;
 }
-.steps .active { border-color: var(--navy); background: #eef3fb; }
+.steps .active { border-color: var(--navy); background: #eef3fb; color: var(--navy); }
+.steps .done { color: var(--ink); }
 .steps .done span { background: var(--ok); color: white; }
 
 .card {
@@ -125,6 +131,16 @@ input, select, textarea {
   font-size: 1rem;
 }
 .wide { grid-column: 1 / -1; }
+.purpose-preview {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-family: "Segoe UI", sans-serif;
+  white-space: pre-wrap;
+}
+.candidates { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.field-warn { color: var(--amber); font-family: "Segoe UI", sans-serif; font-size: 0.8rem; }
 
 .stop {
   border: 1px dashed var(--line);

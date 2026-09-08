@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { buildDays, formatLongDate, formatMoney, formatOtherBreakout, syncDailyLodging, tripTotals } from "./days";
+import { buildDays, formatLongDate, formatMoney, formatOtherBreakout, parkingReimbursableCap, syncDailyLodging, tripTotals } from "./days";
 import { emptyExpense, emptyStop, MAILBOX, POV_RATE_AS_OF, US_STATES } from "./defaults";
-import { lookupConus, suggestLocalities } from "./rates";
+import { applyLocality, bundledFiscalYears, lookupByZip, lookupConus, pickBook, stayCrossesFiscalYear, suggestLocalities } from "./rates";
+import { composedPurpose, emailLooksValid, generatedPurpose, phoneLooksValid } from "./purpose";
 import { requiredDocs } from "./rules";
-import type { CostNote, ExtraExpense, GroundMode, ProvenanceSource, RateBook, TdyStop, TripDocument } from "./types";
+import type { CostNote, ExtraExpense, GroundMode, ProvenanceSource, RateBook, RateLibrary, RateLocality, RateManifest, TdyStop, TripDocument, ZipMap } from "./types";
 import {
   clearWorkingCopy,
   downloadTripJson,
@@ -22,7 +23,8 @@ const STEPS = ["Trip", "Itinerary", "Mode & exceptions", "Packet"] as const;
 export function App() {
   const [step, setStep] = useState(0);
   const [doc, setDoc] = useState<TripDocument>(() => loadWorkingCopy());
-  const [book, setBook] = useState<RateBook | null>(null);
+  const [library, setLibrary] = useState<RateLibrary>({ books: [], zips: {} });
+  const [lookupPicks, setLookupPicks] = useState<Record<string, RateLocality[]>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -30,10 +32,23 @@ export function App() {
   const trip = doc.trip;
 
   useEffect(() => {
-    fetch("./rates/conus-fy2026.json")
-      .then((r) => r.json())
-      .then(setBook)
-      .catch(() => setError("Could not load the bundled GSA FY2026 rate table. You can still enter rates by hand."));
+    void (async () => {
+      try {
+        const manifest = (await fetch("./rates/manifest.json").then((r) => r.json())) as RateManifest;
+        const books = await Promise.all(
+          manifest.fiscalYears.map((fy) => fetch(`./rates/conus-fy${fy}.json`).then((r) => r.json() as Promise<RateBook>)),
+        );
+        const zips: Record<number, ZipMap> = {};
+        await Promise.all(
+          manifest.fiscalYears.map(async (fy) => {
+            zips[fy] = (await fetch(`./rates/zip-fy${fy}.json`).then((r) => r.json())) as ZipMap;
+          }),
+        );
+        setLibrary({ books, zips });
+      } catch {
+        setError("Could not load the bundled GSA rate tables. You can still enter rates by hand.");
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -61,11 +76,42 @@ export function App() {
   }
 
   function applyLookup(stop: TdyStop): TdyStop {
-    if (!book) return stop;
     const date = stop.arrive || trip.departDate;
-    const found = lookupConus(book, stop.city, stop.state, date);
+    const book = pickBook(library.books, date);
+    if (!book) return stop;
+    const found = stop.zip.trim()
+      ? lookupByZip(book, library.zips[book.fiscalYear], stop.zip, date)
+      : lookupConus(book, stop.city, stop.state, date);
+    setLookupPicks((prev) => ({ ...prev, [stop.id]: found.candidates }));
+    if (!found.applied) {
+      return { ...stop, rateSource: "standard", rateLabel: found.label };
+    }
+    const next = {
+      ...stop,
+      mie: found.mie,
+      lodgingMax: found.lodging,
+      lodgingActual: found.lodging,
+      rateSource: found.source,
+      rateLabel: found.label,
+    };
+    if (found.source === "gsa" && found.candidates[0]) {
+      const dest = found.candidates[0];
+      if (!next.city.trim()) next.city = dest.destination;
+      if (!next.state.trim()) next.state = dest.state;
+    }
+    return syncDailyLodging(next);
+  }
+
+  function applyPickedLocality(stop: TdyStop, loc: RateLocality): TdyStop {
+    const date = stop.arrive || trip.departDate;
+    const book = pickBook(library.books, date);
+    if (!book) return stop;
+    const found = applyLocality(book, loc);
+    setLookupPicks((prev) => ({ ...prev, [stop.id]: [] }));
     return syncDailyLodging({
       ...stop,
+      city: loc.destination,
+      state: loc.state,
       mie: found.mie,
       lodgingMax: found.lodging,
       lodgingActual: found.lodging,
@@ -162,6 +208,30 @@ export function App() {
                 <input value={trip.travelerName} onChange={(e) => patch({ travelerName: e.target.value }, ["travelerName"])} />
               </label>
             </Origin>
+            <Origin path="travelerEmail" provenance={doc.provenance}>
+              <label>
+                Traveler email
+                <input
+                  type="email"
+                  value={trip.travelerEmail}
+                  onChange={(e) => patch({ travelerEmail: e.target.value }, ["travelerEmail"])}
+                  autoComplete="email"
+                />
+                {!emailLooksValid(trip.travelerEmail) && <small className="field-warn">Use a full email address (name@domain).</small>}
+              </label>
+            </Origin>
+            <Origin path="travelerPhone" provenance={doc.provenance}>
+              <label>
+                Traveler phone
+                <input
+                  type="tel"
+                  value={trip.travelerPhone}
+                  onChange={(e) => patch({ travelerPhone: e.target.value }, ["travelerPhone"])}
+                  autoComplete="tel"
+                />
+                {!phoneLooksValid(trip.travelerPhone) && <small className="field-warn">Include at least 10 digits.</small>}
+              </label>
+            </Origin>
             <Origin path="hor" provenance={doc.provenance}>
               <label>
                 Home of record
@@ -192,17 +262,6 @@ export function App() {
                 <input type="date" value={trip.returnDate} onChange={(e) => patch({ returnDate: e.target.value }, ["returnDate"])} />
               </label>
             </Origin>
-            <Origin path="purpose" provenance={doc.provenance} className="wide">
-              <label className="wide">
-                Purpose of travel
-                <textarea
-                  rows={4}
-                  value={trip.purpose}
-                  onChange={(e) => patch({ purpose: e.target.value }, ["purpose"])}
-                  placeholder="In support of ETAS task order… include PO-approved upgrades or unusual routing."
-                />
-              </label>
-            </Origin>
           </div>
         </section>
       )}
@@ -211,8 +270,9 @@ export function App() {
         <section className="card">
           <h2>TDY locations and per diem</h2>
           <p className="hint">
-            First and last calendar days of the trip are 75% M&amp;IE. Last day at a location has $0 lodging (checkout),
-            plus an optional late-checkout fee. GSA FY2026 CONUS is bundled; overwrite any rate.
+            First and last calendar days of the trip are 75% M&amp;IE. Arrival night (and that day’s M&amp;IE) belong to
+            the new city. GSA CONUS FY{bundledFiscalYears(library).join("–") || "—"} is bundled and picked from the
+            stay date (federal FY starts 1 Oct). City/state or ZIP; overwrite any rate.
           </p>
           {trip.stops.map((stop, index) => (
             <StopEditor
@@ -221,7 +281,8 @@ export function App() {
               stop={stop}
               departDate={trip.departDate}
               returnDate={trip.returnDate}
-              book={book}
+              library={library}
+              candidates={lookupPicks[stop.id] ?? []}
               provenance={doc.provenance}
               onChange={(next, paths) => {
                 setDoc((d) => {
@@ -247,6 +308,22 @@ export function App() {
                       d.provenance,
                       [`stops.${index}.mie`, `stops.${index}.lodgingMax`, `stops.${index}.lodgingActual`],
                       source,
+                    ),
+                  };
+                });
+              }}
+              onPick={(loc) => {
+                const next = applyPickedLocality(stop, loc);
+                setDoc((d) => {
+                  const stops = d.trip.stops.slice();
+                  stops[index] = next;
+                  return {
+                    ...d,
+                    trip: { ...d.trip, stops },
+                    provenance: markProvenance(
+                      d.provenance,
+                      [`stops.${index}.city`, `stops.${index}.state`, `stops.${index}.mie`, `stops.${index}.lodgingMax`, `stops.${index}.lodgingActual`],
+                      "gsa",
                     ),
                   };
                 });
@@ -277,6 +354,8 @@ export function App() {
             showParking
             parking={trip.expenses.airportParking}
             onParking={(airportParking) => patchExpenses({ airportParking })}
+            rideshareCompare={trip.expenses.rideshareForParking}
+            onRideshareCompare={(rideshareForParking) => patchExpenses({ rideshareForParking })}
             notes={trip.expenses.notes}
             onNotes={(notes) => patchExpenses({ notes })}
             povNoteKey="povOut"
@@ -377,6 +456,30 @@ export function App() {
               <input value={trip.compliance.nonstandardNote} onChange={(e) => patch({ compliance: { ...trip.compliance, nonstandardNote: e.target.value } })} />
             </label>
           )}
+
+          <h3>Purpose of travel</h3>
+          <p className="hint">
+            The first sentence is filled from project, dates, and TDY cities. Add only what the app cannot know
+            (supporting another project, PO-approved SUV, lodging over per diem).
+          </p>
+          <div className="purpose-preview">{generatedPurpose(trip) || "Add project, dates, and locations on the earlier tabs to fill this sentence."}</div>
+          {trip.purposeAddons.map((line, i) => (
+            <label key={`addon-${i}`} className="wide">
+              Additional justification {i + 1}
+              <input
+                value={line}
+                onChange={(e) => {
+                  const purposeAddons = trip.purposeAddons.slice();
+                  purposeAddons[i] = e.target.value;
+                  patch({ purposeAddons }, ["purposeAddons"]);
+                }}
+                placeholder="e.g. Supporting MISTIC while funded on this line; authorized lodging $X over per diem because…"
+              />
+            </label>
+          ))}
+          <button type="button" className="secondary" onClick={() => patch({ purposeAddons: [...trip.purposeAddons, ""] }, ["purposeAddons"])}>
+            Add another line
+          </button>
         </section>
       )}
 
@@ -389,7 +492,10 @@ export function App() {
               <strong>{formatMoney(totals.total)}</strong>
             </div>
             <p>
-              {trip.travelerName || "Traveler"} · {trip.hor || "HOR"} ·{" "}
+              {trip.travelerName || "Traveler"}
+              {trip.travelerEmail ? ` · ${trip.travelerEmail}` : ""}
+              {trip.travelerPhone ? ` · ${trip.travelerPhone}` : ""}
+              {" · "}{trip.hor || "HOR"} ·{" "}
               {trip.departDate ? formatLongDate(trip.departDate) : "—"} – {trip.returnDate ? formatLongDate(trip.returnDate) : "—"}
               {" · "}
               {days.length} day rows
@@ -397,6 +503,9 @@ export function App() {
               {doc.exportedAt ? ` · last export ${doc.exportedAt}` : ""}
             </p>
           </div>
+
+          <h3>Purpose of travel</h3>
+          <div className="purpose-preview">{composedPurpose(trip) || "—"}</div>
 
           <div className="table-wrap">
             <table>
@@ -500,23 +609,29 @@ function StopEditor({
   stop,
   departDate,
   returnDate,
-  book,
+  library,
+  candidates,
   provenance,
   onChange,
   onLookup,
+  onPick,
   onRemove,
 }: {
   index: number;
   stop: TdyStop;
   departDate: string;
   returnDate: string;
-  book: RateBook | null;
+  library: RateLibrary;
+  candidates: RateLocality[];
   provenance: Record<string, ProvenanceSource>;
   onChange: (stop: TdyStop, paths?: string[]) => void;
   onLookup: () => void;
+  onPick: (loc: RateLocality) => void;
   onRemove?: () => void;
 }) {
+  const book = pickBook(library.books, stop.arrive || departDate);
   const suggestions = book ? suggestLocalities(book, stop.city, stop.state) : [];
+  const fyCross = stayCrossesFiscalYear(stop.arrive, stop.depart);
   const showLodgingTable = stop.lodgingMode === "byDay" || stop.taxMode === "byDay";
   const lastDay = stop.depart;
   const p = (field: string) => `stops.${index}.${field}`;
@@ -550,6 +665,17 @@ function StopEditor({
                 <option key={st} value={st}>{st}</option>
               ))}
             </select>
+          </label>
+        </Origin>
+        <Origin path={p("zip")} provenance={provenance}>
+          <label>
+            ZIP (optional)
+            <input
+              inputMode="numeric"
+              value={stop.zip}
+              onChange={(e) => onChange({ ...stop, zip: e.target.value.replace(/\D/g, "").slice(0, 5) }, [p("zip")])}
+              placeholder="77002"
+            />
           </label>
         </Origin>
         <Origin path={p("arrive")} provenance={provenance}>
@@ -695,6 +821,20 @@ function StopEditor({
         </label>
       )}
 
+      {fyCross && (
+        <p className="field-warn">
+          This stay crosses 1 Oct (a new GSA fiscal year). Lookup uses the arrival date; enter by-day lodging if rates change mid-stay.
+        </p>
+      )}
+      {candidates.length > 0 && (
+        <div className="candidates">
+          {candidates.map((loc) => (
+            <button key={`${loc.destination}-${loc.state}-${loc.id}`} type="button" className="secondary" onClick={() => onPick(loc)}>
+              {loc.destination}, {loc.state}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="stop-actions">
         <button type="button" className="secondary" onClick={onLookup} disabled={!book}>
           Look up GSA rate
@@ -719,6 +859,8 @@ function GroundLeg({
   showParking,
   parking,
   onParking,
+  rideshareCompare,
+  onRideshareCompare,
   notes,
   onNotes,
   povNoteKey,
@@ -736,6 +878,8 @@ function GroundLeg({
   showParking?: boolean;
   parking?: number;
   onParking?: (n: number) => void;
+  rideshareCompare?: number;
+  onRideshareCompare?: (n: number) => void;
   notes: Record<string, CostNote>;
   onNotes: (notes: Record<string, CostNote>) => void;
   povNoteKey: string;
@@ -760,13 +904,38 @@ function GroundLeg({
           <label>
             POV miles
             <input type="number" min={0} step={0.1} value={povMiles || ""} onChange={(e) => onPovMiles(num(e.target.value))} />
+            <small>Round-trip miles if you are being picked up on the return leg</small>
             {sameMiles && (
               <button type="button" className="linkish" onClick={sameMiles}>Same as outbound</button>
             )}
           </label>
           <NoteToggle fieldKey={povNoteKey} notes={notes} onNotes={onNotes} />
           {showParking && onParking && (
-            <CostField label="Airport parking" value={parking || 0} onChange={onParking} noteKey={parkingNoteKey || "parking"} notes={notes} onNotes={onNotes} />
+            <>
+              <CostField label="Airport parking" value={parking || 0} onChange={onParking} noteKey={parkingNoteKey || "parking"} notes={notes} onNotes={onNotes} />
+              {(parking || 0) > 0 && onRideshareCompare && (
+                <div>
+                  <CostField
+                    label="Round-trip rideshare estimate (out + back, before tip)"
+                    value={rideshareCompare || 0}
+                    onChange={onRideshareCompare}
+                    noteKey="rideshareCompare"
+                    notes={notes}
+                    onNotes={onNotes}
+                  />
+                  {rideshareCompare ? (
+                    <small>
+                      Max reimbursable parking (travel-team 20% tip): {formatMoney(parkingReimbursableCap(rideshareCompare))}
+                      {(parking || 0) > parkingReimbursableCap(rideshareCompare)
+                        ? " — parking is over that cap; add a note and attach the rideshare quote."
+                        : ""}
+                    </small>
+                  ) : (
+                    <small>Enter the rideshare estimate to see the FTR/travel-team parking cap.</small>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       ) : (
