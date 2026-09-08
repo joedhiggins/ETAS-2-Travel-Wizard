@@ -1,3 +1,4 @@
+import { needsConstructedWorksheet, needsHorComparison } from "./horCompare.ts";
 import type { RequiredDoc, TripState } from "./types";
 
 export function requiredDocs(trip: TripState): RequiredDoc[] {
@@ -75,12 +76,22 @@ export function requiredDocs(trip: TripState): RequiredDoc[] {
     });
   }
 
-  if (trip.compliance.nonstandardMode === "yes") {
+  if (needsConstructedWorksheet(trip)) {
+    const mode = trip.compliance.nonstandardMode === "yes";
+    const hor = needsHorComparison(trip);
+    const why = [
+      mode ? "Claiming a mode that is not the standard FTR-reimbursable mode (for example driving instead of flying)." : "",
+      hor ? "Start or end is somewhere other than HOR for personal / leave reasons. Standard column is constructed HOR ↔ TDY." : "",
+      "Transportation reimbursement is capped at the official constructed (standard) column. Attach one worksheet, not two copies.",
+    ]
+      .filter(Boolean)
+      .join(" ");
     docs.push({
       id: "constructed",
-      title: "Constructed cost comparison",
-      why: "Claiming a mode that is not the standard FTR-reimbursable mode (for example driving instead of flying). Reimbursement is capped at the constructed standard-mode cost.",
+      title: "Task Order Travel Constructed Cost Worksheet",
+      why,
       href: "./forms/Constructed-Cost-Comparison.pdf",
+      note: "Standard = official HOR routing and authorized mode. Preferred = what you actually plan. Put the deviation in Explanation.",
     });
   }
 

@@ -1,4 +1,16 @@
-import type { ExtraExpense, TripState } from "./types";
+import type { ExtraExpense, OfficialConstructed, TripState } from "./types";
+
+export function emptyOfficialConstructed(): OfficialConstructed {
+  return {
+    airfare: 0,
+    baggage: 0,
+    rideshare: 0,
+    povMiles: 0,
+    airportParking: 0,
+    rental: 0,
+    rentalFuel: 0,
+  };
+}
 
 export const MAILBOX = "ETAS_travel@hii.com";
 export const DEFAULT_POV_RATE = 0.76;
@@ -76,6 +88,13 @@ export function defaultTrip(): TripState {
       inflightWifiNote: "",
       nonstandardMode: "no",
       nonstandardNote: "",
+      startOtherThanHor: "no",
+      endOtherThanHor: "no",
+      startOtherReason: "",
+      endOtherReason: "",
+      startOtherPlace: "",
+      endOtherPlace: "",
+      officialConstructed: emptyOfficialConstructed(),
     },
   };
 }

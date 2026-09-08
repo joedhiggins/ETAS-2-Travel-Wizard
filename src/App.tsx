@@ -1,10 +1,34 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  actualConstructed,
+  advisoryTransportCap,
+  constructedExplanation,
+  needsConstructedWorksheet,
+  needsHorComparison,
+  officialConstructedOf,
+  transportTotal,
+} from "./horCompare.ts";
 import { buildDays, formatLongDate, formatMoney, formatOtherBreakout, parkingReimbursableCap, syncDailyLodging, tripTotals } from "./days";
 import { emptyExpense, emptyStop, MAILBOX, POV_RATE_AS_OF, US_STATES } from "./defaults";
 import { applyLocality, bundledFiscalYears, lookupByZip, lookupConus, pickBook, stayCrossesFiscalYear, suggestLocalities } from "./rates";
 import { composedPurpose, emailLooksValid, generatedPurpose, phoneLooksValid } from "./purpose";
 import { requiredDocs } from "./rules";
-import type { CostNote, ExtraExpense, GroundMode, ProvenanceSource, RateBook, RateLibrary, RateLocality, RateManifest, TdyStop, TripDocument, ZipMap } from "./types";
+import type {
+  CostNote,
+  ExtraExpense,
+  GroundMode,
+  OfficialConstructed,
+  OtherThanHorReason,
+  ProvenanceSource,
+  RateBook,
+  RateLibrary,
+  RateLocality,
+  RateManifest,
+  TdyStop,
+  TripDocument,
+  YesNo,
+  ZipMap,
+} from "./types";
 import {
   clearWorkingCopy,
   downloadTripJson,
@@ -58,6 +82,19 @@ export function App() {
   const days = useMemo(() => buildDays(trip), [trip]);
   const totals = useMemo(() => tripTotals(days), [days]);
   const docs = useMemo(() => requiredDocs(trip), [trip]);
+  const comparison = useMemo(() => {
+    const official = officialConstructedOf(trip);
+    const actual = actualConstructed(trip);
+    const rate = trip.expenses.povRate;
+    return {
+      official,
+      actual,
+      officialTotal: transportTotal(official, rate),
+      actualTotal: transportTotal(actual, rate),
+      cap: advisoryTransportCap(trip),
+      explanation: constructedExplanation(trip),
+    };
+  }, [trip]);
 
   function patch(partial: Partial<typeof trip>, paths: string[] = []) {
     setDoc((d) => ({
@@ -65,6 +102,17 @@ export function App() {
       trip: { ...d.trip, ...partial },
       provenance: paths.length ? markProvenance(d.provenance, paths, "user") : d.provenance,
     }));
+  }
+
+  function patchCompliance(partial: Partial<typeof trip.compliance>, paths: string[] = []) {
+    patch({ compliance: { ...trip.compliance, ...partial } }, paths);
+  }
+
+  function patchOfficial(partial: Partial<OfficialConstructed>) {
+    patchCompliance(
+      { officialConstructed: { ...trip.compliance.officialConstructed, ...partial } },
+      ["compliance.officialConstructed"],
+    );
   }
 
   function patchExpenses(partial: Partial<typeof trip.expenses>, paths: string[] = []) {
@@ -254,6 +302,7 @@ export function App() {
               <label>
                 Depart HOR
                 <input type="date" value={trip.departDate} onChange={(e) => patch({ departDate: e.target.value }, ["departDate"])} />
+                <small>Trip dates. If you start or end somewhere else, say so on Mode &amp; exceptions.</small>
               </label>
             </Origin>
             <Origin path="returnDate" provenance={doc.provenance}>
@@ -451,12 +500,58 @@ export function App() {
               <textarea rows={3} value={trip.compliance.inflightWifiNote} onChange={(e) => patch({ compliance: { ...trip.compliance, inflightWifiNote: e.target.value } })} />
             </label>
           )}
-          <YesNoRow label="Are you claiming a non-standard FTR mode (for example driving instead of flying) and still want that cost reimbursed?" value={trip.compliance.nonstandardMode} onChange={(nonstandardMode) => patch({ compliance: { ...trip.compliance, nonstandardMode } })} />
+          <YesNoRow label="Are you claiming a non-standard FTR mode (for example driving instead of flying) and still want that cost reimbursed?" value={trip.compliance.nonstandardMode} onChange={(nonstandardMode) => patchCompliance({ nonstandardMode })} />
           {trip.compliance.nonstandardMode === "yes" && (
             <label className="wide">
               What is the deviation?
-              <input value={trip.compliance.nonstandardNote} onChange={(e) => patch({ compliance: { ...trip.compliance, nonstandardNote: e.target.value } })} />
+              <input value={trip.compliance.nonstandardNote} onChange={(e) => patchCompliance({ nonstandardNote: e.target.value })} />
             </label>
+          )}
+
+          <OtherThanHorBlock
+            side="start"
+            other={trip.compliance.startOtherThanHor}
+            reason={trip.compliance.startOtherReason}
+            place={trip.compliance.startOtherPlace}
+            onOther={(startOtherThanHor) =>
+              patchCompliance({
+                startOtherThanHor,
+                startOtherReason: startOtherThanHor === "yes" ? trip.compliance.startOtherReason || "personal" : "",
+                startOtherPlace: startOtherThanHor === "yes" ? trip.compliance.startOtherPlace : "",
+              })
+            }
+            onReason={(startOtherReason) => patchCompliance({ startOtherReason })}
+            onPlace={(startOtherPlace) => patchCompliance({ startOtherPlace })}
+          />
+          <OtherThanHorBlock
+            side="end"
+            other={trip.compliance.endOtherThanHor}
+            reason={trip.compliance.endOtherReason}
+            place={trip.compliance.endOtherPlace}
+            onOther={(endOtherThanHor) =>
+              patchCompliance({
+                endOtherThanHor,
+                endOtherReason: endOtherThanHor === "yes" ? trip.compliance.endOtherReason || "personal" : "",
+                endOtherPlace: endOtherThanHor === "yes" ? trip.compliance.endOtherPlace : "",
+              })
+            }
+            onReason={(endOtherReason) => patchCompliance({ endOtherReason })}
+            onPlace={(endOtherPlace) => patchCompliance({ endOtherPlace })}
+          />
+
+          {needsConstructedWorksheet(trip) && (
+            <ConstructedCompareCard
+              tripHor={trip.hor}
+              official={comparison.official}
+              actual={comparison.actual}
+              povRate={trip.expenses.povRate}
+              officialTotal={comparison.officialTotal}
+              actualTotal={comparison.actualTotal}
+              cap={comparison.cap}
+              explanation={comparison.explanation}
+              onOfficial={patchOfficial}
+              onCopyActual={() => patchOfficial(comparison.actual)}
+            />
           )}
 
           <h3>Purpose of travel</h3>
@@ -504,7 +599,40 @@ export function App() {
               {doc.revision > 0 ? ` · JSON r${doc.revision}` : ""}
               {doc.exportedAt ? ` · last export ${doc.exportedAt}` : ""}
             </p>
+            {(trip.compliance.startOtherThanHor === "yes" || trip.compliance.endOtherThanHor === "yes") && (
+              <p>
+                {trip.compliance.startOtherThanHor === "yes"
+                  ? `Starts ${trip.compliance.startOtherPlace || "other than HOR"} (${trip.compliance.startOtherReason || "unspecified"})`
+                  : "Starts at HOR"}
+                {" · "}
+                {trip.compliance.endOtherThanHor === "yes"
+                  ? `Ends ${trip.compliance.endOtherPlace || "other than HOR"} (${trip.compliance.endOtherReason || "unspecified"})`
+                  : "Returns to HOR"}
+              </p>
+            )}
           </div>
+
+          {needsConstructedWorksheet(trip) && (
+            <div className="advisory">
+              <h3>Advisory transportation cap</h3>
+              <p className="hint">
+                Draft total above is still your actual estimates. This cap is advisory and transportation-only;
+                it does not change M&amp;IE, lodging, or the workbook.
+              </p>
+              {!comparison.cap.officialEntered ? (
+                <p className="field-warn">Enter official HOR / authorized-mode costs on Mode &amp; exceptions so the cap can be calculated.</p>
+              ) : !comparison.cap.actualEntered ? (
+                <p>Official constructed {formatMoney(comparison.cap.official)}. Add itinerary transportation estimates to compare.</p>
+              ) : (
+                <p>
+                  Actual transportation {formatMoney(comparison.cap.actual)} · official constructed {formatMoney(comparison.cap.official)}
+                  {" · "}reimbursable (lesser) <strong>{formatMoney(comparison.cap.reimbursable)}</strong>
+                  {comparison.cap.excess > 0 ? ` · traveler excess ${formatMoney(comparison.cap.excess)}` : ""}
+                </p>
+              )}
+              {needsHorComparison(trip) && comparison.explanation && <p className="hint">{comparison.explanation}</p>}
+            </div>
+          )}
 
           <h3>Purpose of travel</h3>
           <div className="purpose-preview">{composedPurpose(trip) || "—"}</div>
@@ -1045,6 +1173,156 @@ function NoteToggle({
         />
       )}
     </div>
+  );
+}
+
+function OtherThanHorBlock({
+  side,
+  other,
+  reason,
+  place,
+  onOther,
+  onReason,
+  onPlace,
+}: {
+  side: "start" | "end";
+  other: YesNo;
+  reason: OtherThanHorReason | "";
+  place: string;
+  onOther: (v: YesNo) => void;
+  onReason: (v: OtherThanHorReason) => void;
+  onPlace: (v: string) => void;
+}) {
+  const start = side === "start";
+  return (
+    <div className="hor-block">
+      <YesNoRow
+        label={start ? "Does this trip start somewhere other than HOR?" : "Does this trip end somewhere other than HOR?"}
+        value={other}
+        onChange={onOther}
+      />
+      {other === "yes" && (
+        <>
+          <fieldset className="yesno">
+            <legend>Why?</legend>
+            <label>
+              <input type="radio" checked={reason === "personal"} onChange={() => onReason("personal")} />
+              Personal / leave — compare against constructed HOR travel
+            </label>
+            <label>
+              <input type="radio" checked={reason === "official"} onChange={() => onReason("official")} />
+              Official other site — no HOR comparison
+            </label>
+          </fieldset>
+          <label className="wide">
+            {start ? "Actual start city" : "Actual end city"}
+            <input value={place} onChange={(e) => onPlace(e.target.value)} placeholder="City, ST" />
+          </label>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ConstructedCompareCard({
+  tripHor,
+  official,
+  actual,
+  povRate,
+  officialTotal,
+  actualTotal,
+  cap,
+  explanation,
+  onOfficial,
+  onCopyActual,
+}: {
+  tripHor: string;
+  official: OfficialConstructed;
+  actual: OfficialConstructed;
+  povRate: number;
+  officialTotal: number;
+  actualTotal: number;
+  cap: ReturnType<typeof advisoryTransportCap>;
+  explanation: string;
+  onOfficial: (partial: Partial<OfficialConstructed>) => void;
+  onCopyActual: () => void;
+}) {
+  return (
+    <fieldset className="stop">
+      <legend>Official-route cost comparison</legend>
+      <p className="hint">
+        Same Task Order Travel Constructed Cost Worksheet as a mode deviation — one form, not a second copy.
+        Official column is {tripHor.trim() || "HOR"} ↔ TDY on the authorized mode. Actual column is pulled from
+        the estimates on Itinerary. Copy this into the worksheet Explanation: {explanation || "describe the deviation."}
+      </p>
+      <button type="button" className="secondary" onClick={onCopyActual}>
+        Copy actual into official, then edit HOR routing
+      </button>
+      <div className="table-wrap">
+        <table className="compare">
+          <thead>
+            <tr>
+              <th>Transportation</th>
+              <th>Official (standard)</th>
+              <th>Actual (preferred)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <CompareMoneyRow label="Airfare (include ADTRAV / agent fee)" official={official.airfare} actual={actual.airfare} onChange={(airfare) => onOfficial({ airfare })} />
+            <CompareMoneyRow label="Baggage" official={official.baggage} actual={actual.baggage} onChange={(baggage) => onOfficial({ baggage })} />
+            <CompareMoneyRow label="Taxi / rideshare" official={official.rideshare} actual={actual.rideshare} onChange={(rideshare) => onOfficial({ rideshare })} />
+            <tr>
+              <td>POV miles × {formatMoney(povRate)}</td>
+              <td>
+                <input type="number" min={0} step={0.1} value={official.povMiles || ""} onChange={(e) => onOfficial({ povMiles: num(e.target.value) })} />
+                <small>{formatMoney(official.povMiles * povRate)}</small>
+              </td>
+              <td>
+                {actual.povMiles || 0} mi
+                <small>{formatMoney(actual.povMiles * povRate)}</small>
+              </td>
+            </tr>
+            <CompareMoneyRow label="Airport / departure parking" official={official.airportParking} actual={actual.airportParking} onChange={(airportParking) => onOfficial({ airportParking })} />
+            <CompareMoneyRow label="Rental vehicle" official={official.rental} actual={actual.rental} onChange={(rental) => onOfficial({ rental })} />
+            <CompareMoneyRow label="Rental fuel" official={official.rentalFuel} actual={actual.rentalFuel} onChange={(rentalFuel) => onOfficial({ rentalFuel })} />
+            <tr>
+              <td><strong>Transportation total</strong></td>
+              <td><strong>{formatMoney(officialTotal)}</strong></td>
+              <td><strong>{formatMoney(actualTotal)}</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="hint">
+        {!cap.officialEntered
+          ? "Enter the official column to see the advisory cap."
+          : !cap.actualEntered
+            ? `Official constructed ${formatMoney(cap.official)}. Add itinerary transportation estimates to compare.`
+            : `Advisory reimbursable transportation ${formatMoney(cap.reimbursable)}${cap.excess > 0 ? ` · excess ${formatMoney(cap.excess)} is traveler cost` : ""}.`}
+      </p>
+    </fieldset>
+  );
+}
+
+function CompareMoneyRow({
+  label,
+  official,
+  actual,
+  onChange,
+}: {
+  label: string;
+  official: number;
+  actual: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <tr>
+      <td>{label}</td>
+      <td>
+        <input type="number" min={0} step={0.01} value={official || ""} onChange={(e) => onChange(num(e.target.value))} />
+      </td>
+      <td>{formatMoney(actual)}</td>
+    </tr>
   );
 }
 
