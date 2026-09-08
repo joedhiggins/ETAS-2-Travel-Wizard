@@ -38,13 +38,26 @@ export function syncDailyLodging(stop: TdyStop): TdyStop {
 }
 
 function stopOnDate(stops: TdyStop[], date: string): { stop: TdyStop; index: number } | null {
+  let arriving: { stop: TdyStop; index: number } | null = null;
+  let covering: { stop: TdyStop; index: number } | null = null;
   for (let i = 0; i < stops.length; i++) {
     const stop = stops[i];
-    if (stop.arrive && stop.depart && date >= stop.arrive && date <= stop.depart) {
-      return { stop, index: i };
-    }
+    if (!stop.arrive || !stop.depart || date < stop.arrive || date > stop.depart) continue;
+    const hit = { stop, index: i };
+    if (date === stop.arrive) arriving = hit;
+    else if (!covering) covering = hit;
   }
-  return null;
+  return arriving ?? covering;
+}
+
+export function departingStop(stops: TdyStop[], date: string): TdyStop | null {
+  return stops.find((stop) => stop.depart === date) ?? null;
+}
+
+export const RIDESHARE_TIP_FACTOR = 1.2;
+
+export function parkingReimbursableCap(rideshareRoundTrip: number): number {
+  return round2(rideshareRoundTrip * RIDESHARE_TIP_FACTOR);
 }
 
 function firstNight(stop: TdyStop): string | null {
@@ -135,6 +148,10 @@ export function buildDays(trip: TripState): DayRow[] {
       if (stay.taxes) otherItems.push({ label: "Lodging taxes/fees", amount: stay.taxes });
       if (stay.lateCheckout) otherItems.push({ label: "Late checkout", amount: stay.lateCheckout });
     }
+    const leaving = departingStop(trip.stops, date);
+    if (leaving && leaving.id !== hit?.stop.id && leaving.lateCheckoutFee) {
+      otherItems.push({ label: "Late checkout", amount: leaving.lateCheckoutFee });
+    }
 
     consecutive[stopKey] = (consecutive[stopKey] || 0) + 1;
 
@@ -145,6 +162,14 @@ export function buildDays(trip: TripState): DayRow[] {
         povMiles = e.povMilesOrigin;
         ground = e.airportParking;
         if (e.airportParking) comments.push("Airport parking");
+        if (e.airportParking && e.rideshareForParking) {
+          const cap = parkingReimbursableCap(e.rideshareForParking);
+          comments.push(
+            e.airportParking > cap
+              ? `Parking exceeds travel-team rideshare×${RIDESHARE_TIP_FACTOR} cap ${cap.toFixed(2)}`
+              : `Parking at or under rideshare×${RIDESHARE_TIP_FACTOR} cap ${cap.toFixed(2)}`,
+          );
+        }
         const n = noteText(trip, "povOut");
         if (n) comments.push(n);
         const p = noteText(trip, "parking");

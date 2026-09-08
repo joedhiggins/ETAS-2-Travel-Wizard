@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import { buildDays, formatLongDate, formatOtherBreakout, rowTotals, tripTotals } from "./days";
+import { composedPurpose } from "./purpose";
 import type { TripState } from "./types";
 
 function money(n: number): number {
@@ -58,8 +59,9 @@ export async function downloadWorkbook(trip: TripState): Promise<void> {
 
   ws.mergeCells("A2:B2");
   ws.getCell("A2").value = "Name";
-  ws.getCell("C2").value = trip.travelerName;
+  ws.getCell("C2").value = [trip.travelerName, trip.travelerEmail, trip.travelerPhone].filter(Boolean).join("\n");
   ws.getCell("C2").fill = orange;
+  ws.getCell("C2").alignment = { wrapText: true, vertical: "top" };
   ws.getCell("D2").value = "Project";
   ws.getCell("E2").value = trip.project;
   ws.getCell("E2").fill = orange;
@@ -69,8 +71,9 @@ export async function downloadWorkbook(trip: TripState): Promise<void> {
   ws.getCell("G2").fill = orange;
   ws.mergeCells("I2:J2");
   ws.getCell("I2").value = "Purpose of Travel";
+  ws.getCell("I2").alignment = { wrapText: true, vertical: "top" };
   ws.mergeCells("K2:N2");
-  ws.getCell("K2").value = trip.purpose;
+  ws.getCell("K2").value = composedPurpose(trip);
   ws.getCell("K2").fill = orange;
   ws.getCell("K2").alignment = { wrapText: true, vertical: "top" };
   ws.mergeCells("O2:P2");
@@ -152,7 +155,7 @@ export async function downloadWorkbook(trip: TripState): Promise<void> {
     ws.getCell(r, 15).value = { formula: `N${r}*${row.povRate}` };
   });
 
-  ws.getRow(2).height = 48;
+  ws.getRow(2).height = headerRowHeight(composedPurpose(trip), [trip.travelerName, trip.travelerEmail, trip.travelerPhone]);
   const widths = [10, 12, 22, 12, 12, 12, 12, 12, 12, 12, 10, 12, 10, 12, 12, 16, 14, 36, 32];
   widths.forEach((w, i) => {
     ws.getColumn(i + 1).width = w;
@@ -163,7 +166,7 @@ export async function downloadWorkbook(trip: TripState): Promise<void> {
   ws.getCell(`A${noteRow}`).value =
     `Generated locally for ETAS TAR (estimates). Submit this workbook plus the required-docs packet to ETAS_travel@hii.com. ` +
     `Do not book until the Deputy Program Manager approves the EA. POV rate used: $${trip.expenses.povRate.toFixed(3)}/mi. ` +
-    `Per diem lookups: GSA FY2026 CONUS table bundled in the app; traveler may overwrite. Not the Costpoint system of record.`;
+    `Per diem lookups: bundled GSA CONUS tables by federal FY (1 Oct); city/state or ZIP map; traveler may overwrite. Not the Costpoint system of record.`;
   ws.getCell(`A${noteRow}`).alignment = { wrapText: true, vertical: "top" };
   ws.getRow(noteRow).height = 48;
 
@@ -177,6 +180,17 @@ export async function downloadWorkbook(trip: TripState): Promise<void> {
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+/** Excel row height is in points; ~15pt per wrapped line, floor so one line still fits the old header. */
+function headerRowHeight(purpose: string, identity: string[]): number {
+  const identityLines = identity.filter(Boolean).length || 1;
+  const wrappedPurpose = purpose.split("\n").reduce((n, line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return n + 1;
+    return n + Math.max(1, Math.ceil(trimmed.length / 55));
+  }, purpose ? 0 : 1);
+  return Math.min(180, Math.max(48, Math.max(identityLines, wrappedPurpose) * 16 + 10));
 }
 
 function excelDate(iso: string): Date {

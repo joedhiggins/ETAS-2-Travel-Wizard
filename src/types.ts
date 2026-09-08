@@ -27,6 +27,7 @@ export interface TdyStop {
   id: string;
   city: string;
   state: string;
+  zip: string;
   arrive: string;
   depart: string;
   mie: number;
@@ -54,6 +55,7 @@ export interface TripExpenses {
   povReturnFollowsOutbound: boolean;
   povRate: number;
   airportParking: number;
+  rideshareForParking: number;
   rideshareOrigin: number;
   rideshareReturn: number;
   extraExpenses: ExtraExpense[];
@@ -75,10 +77,13 @@ export interface Compliance {
 
 export interface TripState {
   travelerName: string;
+  travelerEmail: string;
+  travelerPhone: string;
   hor: string;
   project: string;
   projectCode: string;
   purpose: string;
+  purposeAddons: string[];
   departDate: string;
   returnDate: string;
   stops: TdyStop[];
@@ -158,4 +163,18 @@ export interface RateBook {
   fiscalYear: number;
   standard: { lodging: number; mie: number };
   localities: RateLocality[];
+}
+
+export interface RateManifest {
+  fiscalYears: number[];
+}
+
+export interface RateLibrary {
+  books: RateBook[];
+  zips: Record<number, ZipMap>;
+}
+
+export interface ZipMap {
+  fiscalYear: number;
+  z: Record<string, string>;
 }
