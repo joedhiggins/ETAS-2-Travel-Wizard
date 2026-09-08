@@ -2,6 +2,7 @@ export type YesNo = "yes" | "no";
 export type LodgingEntryMode = "flat" | "byDay";
 export type TaxEntryMode = "total" | "byDay";
 export type GroundMode = "pov" | "rideshare";
+export type OtherThanHorReason = "personal" | "official";
 
 export interface DailyLodging {
   date: string;
@@ -62,6 +63,16 @@ export interface TripExpenses {
   notes: Record<string, CostNote>;
 }
 
+export interface OfficialConstructed {
+  airfare: number;
+  baggage: number;
+  rideshare: number;
+  povMiles: number;
+  airportParking: number;
+  rental: number;
+  rentalFuel: number;
+}
+
 export interface Compliance {
   hasAir: YesNo;
   cheapestMeetsTimeline: YesNo;
@@ -73,6 +84,13 @@ export interface Compliance {
   inflightWifiNote: string;
   nonstandardMode: YesNo;
   nonstandardNote: string;
+  startOtherThanHor: YesNo;
+  endOtherThanHor: YesNo;
+  startOtherReason: OtherThanHorReason | "";
+  endOtherReason: OtherThanHorReason | "";
+  startOtherPlace: string;
+  endOtherPlace: string;
+  officialConstructed: OfficialConstructed;
 }
 
 export interface TripState {

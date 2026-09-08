@@ -1,4 +1,4 @@
-import { defaultTrip, emptyStop, newId } from "./defaults";
+import { defaultTrip, emptyOfficialConstructed, emptyStop, newId } from "./defaults";
 import type { ProvenanceSource, TripDocument, TripFileKind, TripState } from "./types";
 
 /**
@@ -6,8 +6,9 @@ import type { ProvenanceSource, TripDocument, TripFileKind, TripState } from "./
  * 1 — Envelope: schemaVersion, kind, tripId, revision, exportedAt, provenance, trip.
  *     Bare TripState files (pre-envelope exports) migrate to 1 on import.
  * 2 — travelerEmail, travelerPhone, purposeAddons, stop.zip, expenses.rideshareForParking.
+ * 3 — Non-HOR start/end detection and official constructed transportation column.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const STORAGE_KEY = "etas-tar-doc-v1";
 export const LEGACY_STORAGE_KEY = "etas-tar-beta-v2";
 
@@ -95,7 +96,7 @@ export function parseTripFile(raw: string): { doc: TripDocument; warning?: strin
   if (errors.length) throw new Error(errors.join(" "));
   return {
     doc: emptyDocument(trip),
-    warning: "Imported a legacy trip file (no schema envelope). Saved going forward as schema 2.",
+    warning: "Imported a legacy trip file (no schema envelope). Saved going forward as schema 3.",
   };
 }
 
@@ -204,7 +205,14 @@ function hydrateTrip(value: unknown): TripState {
     ...base,
     ...parsed,
     expenses: { ...base.expenses, ...parsed.expenses, notes: parsed.expenses?.notes ?? {} },
-    compliance: { ...base.compliance, ...parsed.compliance },
+    compliance: {
+      ...base.compliance,
+      ...parsed.compliance,
+      officialConstructed: {
+        ...emptyOfficialConstructed(),
+        ...parsed.compliance?.officialConstructed,
+      },
+    },
     purposeAddons: parsed.purposeAddons?.length ? parsed.purposeAddons : purposeAddonsFromLegacy(parsed),
     stops: (parsed.stops?.length ? parsed.stops : base.stops).map((s) => ({
       ...emptyStop(),

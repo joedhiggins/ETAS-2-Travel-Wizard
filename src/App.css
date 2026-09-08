@@ -231,6 +231,21 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line
 .pager { justify-content: space-between; }
 .error { color: #9b2c2c; }
 .notice { color: var(--ok); }
+.advisory {
+  margin: 16px 0 8px;
+  padding: 12px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+}
+.advisory h3 { margin: 0 0 8px; }
+.advisory p { margin: 0 0 8px; }
+.compare td:nth-child(2),
+.compare td:nth-child(3),
+.compare th:nth-child(2),
+.compare th:nth-child(3) { width: 28%; }
+.compare td small { display: block; margin-top: 4px; }
+.hor-block { margin-bottom: 8px; }
 
 @media (max-width: 720px) {
   .grid, .steps, .mode-row, .extra { grid-template-columns: 1fr; }
