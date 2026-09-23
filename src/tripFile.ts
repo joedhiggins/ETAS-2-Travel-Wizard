@@ -1,5 +1,5 @@
-import { defaultTrip, emptyOfficialConstructed, emptyStop, newId } from "./defaults";
-import type { ProvenanceSource, TripDocument, TripFileKind, TripState } from "./types";
+import { defaultTrip, emptyOfficialConstructed, emptyStop, newId } from "./defaults.ts";
+import type { ProvenanceSource, TripDocument, TripState } from "./types";
 
 /**
  * Schema changelog
@@ -7,12 +7,14 @@ import type { ProvenanceSource, TripDocument, TripFileKind, TripState } from "./
  *     Bare TripState files (pre-envelope exports) migrate to 1 on import.
  * 2 — travelerEmail, travelerPhone, purposeAddons, stop.zip, expenses.rideshareForParking.
  * 3 — Non-HOR start/end detection and official constructed transportation column.
+ * Provenance `llm-accepted` — an `llm` value left unchanged when trip JSON was downloaded.
  */
 export const SCHEMA_VERSION = 3;
 export const STORAGE_KEY = "etas-tar-doc-v1";
 export const LEGACY_STORAGE_KEY = "etas-tar-beta-v2";
+export const REVIEWER_STORAGE_KEY = "etas-tar-review-v1";
 
-const PROVENANCE: ProvenanceSource[] = ["user", "llm", "gsa", "travel-team", "unconfirmed"];
+const PROVENANCE: ProvenanceSource[] = ["user", "llm", "llm-accepted", "gsa", "travel-team", "unconfirmed"];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const REVIEW_SOURCES: ProvenanceSource[] = ["llm", "unconfirmed"];
@@ -30,9 +32,65 @@ export function emptyDocument(trip: TripState = defaultTrip()): TripDocument {
 
 export function originClass(source: ProvenanceSource | undefined): string {
   if (source === "llm" || source === "unconfirmed") return "origin-review";
+  if (source === "llm-accepted") return "origin-accepted";
   if (source === "gsa") return "origin-gsa";
   if (source === "travel-team") return "origin-team";
   return "";
+}
+
+export function provenanceCaption(source: ProvenanceSource | undefined): string {
+  switch (source) {
+    case "llm":
+      return "LLM";
+    case "unconfirmed":
+      return "Unconfirmed";
+    case "llm-accepted":
+      return "LLM accepted";
+    case "gsa":
+      return "GSA lookup";
+    case "travel-team":
+      return "Travel team";
+    default:
+      return "";
+  }
+}
+
+/** Untouched `llm` values become `llm-accepted` on JSON download. `unconfirmed` stays. */
+export function acceptReviewedLlm(provenance: Record<string, ProvenanceSource>): Record<string, ProvenanceSource> {
+  const next = { ...provenance };
+  for (const [key, src] of Object.entries(next)) {
+    if (src === "llm") next[key] = "llm-accepted";
+  }
+  return next;
+}
+
+export function nextExport(doc: TripDocument, exportedAt: string): TripDocument {
+  return {
+    ...doc,
+    exportedAt,
+    revision: doc.revision + 1,
+    provenance: acceptReviewedLlm(doc.provenance),
+  };
+}
+
+export function shiftStopProvenance(
+  provenance: Record<string, ProvenanceSource>,
+  removedIndex: number,
+): Record<string, ProvenanceSource> {
+  const next: Record<string, ProvenanceSource> = {};
+  const re = /^stops\.(\d+)\.(.+)$/;
+  for (const [key, src] of Object.entries(provenance)) {
+    const match = key.match(re);
+    if (!match) {
+      next[key] = src;
+      continue;
+    }
+    const index = Number(match[1]);
+    if (index === removedIndex) continue;
+    const dest = index > removedIndex ? index - 1 : index;
+    next[`stops.${dest}.${match[2]}`] = src;
+  }
+  return next;
 }
 
 export function needsReview(provenance: Record<string, ProvenanceSource>): boolean {
@@ -50,6 +108,20 @@ export function markProvenance(
 }
 
 export function parseTripFile(raw: string): { doc: TripDocument; warning?: string } {
+  const parsed = readTripFile(raw, "wizard");
+  if (parsed.errors.length) throw new Error(parsed.errors.join(" "));
+  return { doc: parsed.doc, warning: parsed.warning };
+}
+
+/**
+ * Open authorization JSON.
+ * Field problems are returned in `errors` so a reviewer can correct them.
+ * Invalid JSON, a non-trip file, an expense file, or an unknown schema still throw.
+ */
+export function readTripFile(
+  raw: string,
+  audience: "wizard" | "review" = "review",
+): { doc: TripDocument; warning?: string; errors: string[] } {
   let data: unknown;
   try {
     data = JSON.parse(raw);
@@ -62,7 +134,11 @@ export function parseTripFile(raw: string): { doc: TripDocument; warning?: strin
   const obj = data as Record<string, unknown>;
 
   if (obj.kind === "expense") {
-    throw new Error("This wizard opens authorization JSON only. Expense / actuals files belong in the reviewer (later).");
+    throw new Error(
+      audience === "review"
+        ? "Expense / actuals files are not openable yet. Open an authorization JSON."
+        : "This wizard opens authorization JSON only. Expense / actuals files belong in the reviewer (later).",
+    );
   }
 
   if (typeof obj.schemaVersion === "number") {
@@ -73,18 +149,17 @@ export function parseTripFile(raw: string): { doc: TripDocument; warning?: strin
       throw new Error(`Unsupported schema version ${obj.schemaVersion}.`);
     }
     const trip = hydrateTrip(obj.trip);
-    const errors = validateTrip(trip);
-    if (errors.length) throw new Error(errors.join(" "));
     return {
       doc: {
         schemaVersion: SCHEMA_VERSION,
-        kind: asKind(obj.kind),
+        kind: "authorization",
         tripId: typeof obj.tripId === "string" && obj.tripId ? obj.tripId : newId(),
         revision: asNonNegInt(obj.revision),
         exportedAt: typeof obj.exportedAt === "string" ? obj.exportedAt : undefined,
         provenance: asProvenance(obj.provenance),
         trip,
       },
+      errors: tripFieldErrors(trip),
     };
   }
 
@@ -92,11 +167,10 @@ export function parseTripFile(raw: string): { doc: TripDocument; warning?: strin
     throw new Error("This JSON is not a trip file (missing trip data and schemaVersion).");
   }
   const trip = hydrateTrip(obj);
-  const errors = validateTrip(trip);
-  if (errors.length) throw new Error(errors.join(" "));
   return {
     doc: emptyDocument(trip),
     warning: "Imported a legacy trip file (no schema envelope). Saved going forward as schema 3.",
+    errors: tripFieldErrors(trip),
   };
 }
 
@@ -120,15 +194,14 @@ export function tripJsonFilename(trip: TripState, exportedAt: string, revision: 
 }
 
 export function downloadTripJson(doc: TripDocument): TripDocument {
-  const exportedAt = new Date().toISOString();
-  const revision = doc.revision + 1;
-  const blob = new Blob([serializeTripFile(doc, exportedAt, revision)], { type: "application/json" });
+  const next = nextExport(doc, new Date().toISOString());
+  const blob = new Blob([serializeTripFile(next, next.exportedAt ?? "", next.revision)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = tripJsonFilename(doc.trip, exportedAt, revision);
+  a.download = tripJsonFilename(next.trip, next.exportedAt ?? "", next.revision);
   a.click();
   URL.revokeObjectURL(a.href);
-  return { ...doc, exportedAt, revision };
+  return next;
 }
 
 export function compactStamp(iso: string): string {
@@ -175,12 +248,37 @@ export function clearWorkingCopy(): void {
   localStorage.removeItem(LEGACY_STORAGE_KEY);
 }
 
-function looksLikeTrip(obj: Record<string, unknown>): boolean {
-  return Array.isArray(obj.stops) || typeof obj.travelerName === "string" || typeof obj.expenses === "object";
+export function loadReviewCopy(): TripDocument | null {
+  try {
+    const raw = localStorage.getItem(REVIEWER_STORAGE_KEY);
+    if (!raw) return null;
+    return readTripFile(raw, "review").doc;
+  } catch {
+    return null;
+  }
 }
 
-function asKind(value: unknown): TripFileKind {
-  return value === "expense" ? "expense" : "authorization";
+export function saveReviewCopy(doc: TripDocument): void {
+  localStorage.setItem(
+    REVIEWER_STORAGE_KEY,
+    JSON.stringify({
+      schemaVersion: doc.schemaVersion,
+      kind: "authorization",
+      tripId: doc.tripId,
+      revision: doc.revision,
+      exportedAt: doc.exportedAt,
+      provenance: doc.provenance,
+      trip: doc.trip,
+    }),
+  );
+}
+
+export function clearReviewCopy(): void {
+  localStorage.removeItem(REVIEWER_STORAGE_KEY);
+}
+
+function looksLikeTrip(obj: Record<string, unknown>): boolean {
+  return Array.isArray(obj.stops) || typeof obj.travelerName === "string" || typeof obj.expenses === "object";
 }
 
 function asNonNegInt(value: unknown): number {
@@ -228,7 +326,7 @@ function purposeAddonsFromLegacy(parsed: Partial<TripState>): string[] {
   return [""];
 }
 
-function validateTrip(trip: TripState): string[] {
+export function tripFieldErrors(trip: TripState): string[] {
   const errors: string[] = [];
   if (!Array.isArray(trip.stops) || trip.stops.length < 1) {
     errors.push("Trip needs at least one TDY stop.");

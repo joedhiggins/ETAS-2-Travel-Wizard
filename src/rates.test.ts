@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fiscalYearForDate, lookupConus, lookupByZip, pickBook, stayCrossesFiscalYear } from "./rates.ts";
-import type { RateBook, ZipMap } from "./types.ts";
+import { checkBundledRate, fiscalYearForDate, lookupConus, lookupByZip, pickBook, stayCrossesFiscalYear } from "./rates.ts";
+import type { RateBook, RateLibrary, ZipMap } from "./types.ts";
 
 const book: RateBook = {
   source: "test",
@@ -43,6 +43,35 @@ describe("city lookup", () => {
     const hit = lookupConus(book, "Huston", "TX", "2026-03-05");
     assert.equal(hit.applied, false);
     assert.ok(hit.candidates.some((c) => c.destination === "Houston"));
+  });
+});
+
+describe("bundled comparison", () => {
+  const library: RateLibrary = { books: [book], zips: { 2026: { fiscalYear: 2026, z: { "77002": "Houston|TX" } } } };
+  const stop = {
+    city: "Houston",
+    state: "TX",
+    zip: "",
+    arrive: "2026-03-05",
+    mie: 80,
+    lodgingMax: 100,
+  };
+
+  it("shows the bundled figures when the entered cap differs", () => {
+    const check = checkBundledRate(library, stop, "2026-03-05");
+    assert.equal(check.status, "differ");
+    assert.equal(check.lodging, 168);
+    assert.equal(check.mie, 80);
+  });
+
+  it("matches when the entered rates are the bundled ones", () => {
+    const check = checkBundledRate(library, { ...stop, lodgingMax: 168 }, "2026-03-05");
+    assert.equal(check.status, "match");
+  });
+
+  it("does not call a typo a rate mismatch", () => {
+    const check = checkBundledRate(library, { ...stop, city: "Huston", mie: 50, lodgingMax: 50 }, "2026-03-05");
+    assert.equal(check.status, "ambiguous");
   });
 });
 

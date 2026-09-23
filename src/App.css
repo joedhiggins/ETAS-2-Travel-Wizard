@@ -57,7 +57,49 @@ body {
 .origin-team select,
 .origin-team textarea {
   border-color: var(--navy);
+  box-shadow: 0 0 0 1px var(--navy);
 }
+.origin-accepted input,
+.origin-accepted select,
+.origin-accepted textarea {
+  border-color: #6e675c;
+  box-shadow: 0 0 0 1px #6e675c;
+}
+.origin-caption {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.origin-review .origin-caption { color: var(--amber); }
+.origin-accepted .origin-caption { color: #5c564c; }
+.origin-gsa .origin-caption { color: var(--ok); }
+.origin-team .origin-caption { color: var(--navy); }
+.hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 4px; }
+a.button-link {
+  display: inline-flex;
+  align-items: center;
+  background: var(--navy);
+  color: white;
+  text-decoration: none;
+  border-radius: 999px;
+  padding: 10px 16px;
+  font-family: "Segoe UI", sans-serif;
+  font-weight: 650;
+  font-size: 0.95rem;
+}
+a.button-link.secondary {
+  background: white;
+  color: var(--navy);
+  border: 1px solid var(--navy);
+}
+.field-errors { border-color: #9b2c2c; }
+.field-errors h2 { color: #9b2c2c; font-size: 1.15rem; }
+.field-errors ul { margin: 0; padding-left: 1.2rem; }
+.field-errors li { margin: 4px 0; font-family: "Segoe UI", sans-serif; }
+.rate-note { margin: 0 0 12px; }
+.card + .card { margin-top: 16px; }
 
 .steps {
   display: grid;

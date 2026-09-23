@@ -110,7 +110,7 @@ export interface TripState {
 }
 
 /** Current trip JSON envelope. Bump SCHEMA_VERSION in tripFile.ts when this changes. */
-export type ProvenanceSource = "user" | "llm" | "gsa" | "travel-team" | "unconfirmed";
+export type ProvenanceSource = "user" | "llm" | "llm-accepted" | "gsa" | "travel-team" | "unconfirmed";
 export type TripFileKind = "authorization" | "expense";
 
 export interface TripDocument {

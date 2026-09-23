@@ -1,4 +1,4 @@
-import type { RateBook, RateLibrary, RateLocality, SeasonMd, ZipMap } from "./types";
+import type { RateBook, RateLibrary, RateLocality, SeasonMd, TdyStop, ZipMap } from "./types";
 
 export interface RateHit {
   lodging: number;
@@ -201,5 +201,41 @@ export function applyLocality(book: RateBook, loc: RateLocality): RateHit {
 
 export function bundledFiscalYears(library: RateLibrary): number[] {
   return library.books.map((b) => b.fiscalYear).sort((a, b) => a - b);
+}
+
+export type BundledRateStatus = "unavailable" | "none" | "ambiguous" | "match" | "differ";
+
+export interface BundledRateCheck {
+  status: BundledRateStatus;
+  label: string;
+  mie?: number;
+  lodging?: number;
+}
+
+/** Compare stored M&IE and lodging cap with a bundled lookup. Does not change the stop. */
+export function checkBundledRate(
+  library: RateLibrary,
+  stop: Pick<TdyStop, "city" | "state" | "zip" | "arrive" | "mie" | "lodgingMax">,
+  departDate: string,
+): BundledRateCheck {
+  const date = stop.arrive || departDate;
+  const book = pickBook(library.books, date);
+  if (!book) return { status: "unavailable", label: "Bundled GSA tables are not loaded yet." };
+  const hit = stop.zip.trim()
+    ? lookupByZip(book, library.zips[book.fiscalYear], stop.zip, date)
+    : lookupConus(book, stop.city, stop.state, date);
+  if (!hit.applied || hit.source !== "gsa") {
+    if (hit.candidates.length) return { status: "ambiguous", label: hit.label };
+    return { status: "none", label: hit.label };
+  }
+  const same =
+    Math.round(hit.mie * 100) === Math.round(stop.mie * 100) &&
+    Math.round(hit.lodging * 100) === Math.round(stop.lodgingMax * 100);
+  return {
+    status: same ? "match" : "differ",
+    label: hit.label,
+    mie: hit.mie,
+    lodging: hit.lodging,
+  };
 }
 
